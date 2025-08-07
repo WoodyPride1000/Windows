@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GNSS Compass UI</title>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet" />
+    <!-- Tailwind CSS with JIT compiler -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --primary-color: #3b82f6;
+            --secondary-color: #e5e7eb;
+            --text-color: #1f2937;
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+        }
+
+        /* Set a fixed height for the map container */
+        #map {
+            height: 500px;
+        }
+
+        /* Style for the active tab */
+        .tab.active {
+            background-color: var(--primary-color) !important;
+            color: white !important;
+        }
+
+        /* Custom message box for alerts */
+        #messageBox {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        #messageBox.show {
+            opacity: 1;
+        }
+    </style>
+    <!-- Leaflet JS -->
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Chart.js for the heading distribution graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <!-- Socket.io is included in the original HTML, so we'll keep the link. -->
+    <!-- We'll simulate its behavior in the JS below. -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
+    <!-- Message Box for non-alert notifications -->
+    <div id="messageBox" class="hidden"></div>
+    
+    <div class="max-w-screen-xl mx-auto p-4 md:p-6 lg:p-8">
+        <!-- Tabs -->
+        <div class="tabs flex space-x-2 md:space-x-4 mb-4">
+            <button id="tabMap" class="tab active bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200 hover:bg-blue-600">
+                地図
+            </button>
+            <button id="tabControl" class="tab bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200 hover:bg-gray-300">
+                制御
+            </button>
+        </div>
+
+        <!-- Tab Content Panels -->
+        <div id="tabContent" class="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-lg transition-colors duration-300">
+            <!-- Map Panel -->
+            <div id="mapPanel" class="block">
+                <div id="map" class="w-full rounded-xl shadow-inner mb-4"></div>
+                
+                <!-- Information and Control Panel -->
+                <div id="infoPanel" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm bg-gray-50 dark:bg-gray-700 p-4 rounded-lg shadow-sm">
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="現在地" data-label-en="Position" class="font-bold">現在地 (Lat/Lng)</span>: 
+                        <span id="latlng" class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="UTM" data-label-en="UTM" class="font-bold">UTM</span>: 
+                        <span id="utm" class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="方位角" data-label-en="Heading" class="font-bold">方位角</span>: 
+                        <span id="heading" class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="GPS状態" data-label-en="GPS Status" class="font-bold">GPS状態</span>: 
+                        <span id="gpsStatus" class="font-mono text-green-500 font-semibold">--</span>
+                    </div>
+                    <!-- New container for multiple symbol info -->
+                    <div id="symbolInfoContainer" class="col-span-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        <!-- Symbol info will be dynamically inserted here -->
+                        <div class="flex items-center space-x-2">
+                            <span data-label-ja="シンボル距離" data-label-en="Symbol Distance" class="font-bold">シンボル距離</span>: 
+                            <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span data-label-ja="仰俯角" data-label-en="Elevation Angle" class="font-bold">仰俯角</span>: 
+                            <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <label class="flex items-center space-x-1 cursor-pointer">
+                            <input type="checkbox" id="useOfflineTiles" class="form-checkbox h-4 w-4 text-blue-600 rounded">
+                            <span class="text-gray-700 dark:text-gray-200">タイルキャッシュ</span>
+                        </label>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <label for="sectorAngle" class="text-gray-700 dark:text-gray-200">
+                            <span data-label-ja="扇形角度" data-label-en="Sector Angle">扇形角度</span>: 
+                            <span id="angleVal" class="font-mono text-blue-600">30</span>°
+                        </label>
+                        <input type="range" id="sectorAngle" min="10" max="180" value="30" oninput="document.getElementById('angleVal').textContent = this.value">
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 mt-4">
+                    <button id="toggleFollow" class="bg-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors duration-200">
+                        追従: OFF
+                    </button>
+                    <button id="toggleLang" class="bg-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors duration-200">
+                        🌐 言語
+                    </button>
+                    <button id="toggleSim" class="bg-yellow-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-yellow-500 transition-colors duration-200">
+                        シミュレーター起動
+                    </button>
+                    <button id="centerMap" class="bg-green-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-500 transition-colors duration-200">
+                        自己位置に移動
+                    </button>
+                    <button id="downloadLog" class="bg-blue-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-500 transition-colors duration-200">
+                        ログ保存
+                    </button>
+                    <button id="clearRoute" class="bg-red-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-500 transition-colors duration-200">
+                        ルートクリア
+                    </button>
+                    <button id="toggleDebug" class="bg-purple-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-500 transition-colors duration-200">
+                        Debug: ON
+                    </button>
+                    <label for="csvUpload" class="bg-indigo-400 px-3 py-2 rounded-lg text-sm font-medium cursor-pointer text-center hover:bg-indigo-500 transition-colors duration-200">
+                        CSV再生
+                    </label>
+                    <input type="file" id="csvUpload" accept=".csv" class="hidden">
+                    <button id="servoBtn" class="bg-orange-400 px-3 py-2 rounded-lg text-sm font-medium hover:bg-orange-500 transition-colors duration-200">
+                        サーボ制御（仮想）
+                    </button>
+                    <button id="clearCacheBtn" class="bg-red-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-300 transition-colors duration-200">
+                        キャッシュクリア
+                    </button>
+                    <button id="clearSymbolBtn" class="bg-pink-300 px-3 py-2 rounded-lg text-sm font-medium hover:bg-pink-400 transition-colors duration-200">
+                        シンボルクリア
+                    </button>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div id="controlPanel" class="hidden">
+                <h2 class="text-xl font-bold mb-4 text-gray-800 dark:text-white">制御・グラフ</h2>
+                <div class="text-gray-600 dark:text-gray-300">
+                    <p>このパネルでは、デバイスの制御やセンサーデータのグラフ表示を行うことができます。</p>
+                    <ul class="list-disc list-inside mt-2 space-y-1">
+                        <li><b>速度制御:</b> デバイスの移動速度を調整。</li>
+                        <li><b>角度制御:</b> 方向を調整。</li>
+                        <li><b>データグラフ:</b> 方位角やGPS精度などの履歴データを可視化。</li>
+                        <li><b>カスタムレイヤー:</b> `HeadingSectorLayer`というカスタムレイヤーを使用しています。</li>
+                    </ul>
+                </div>
+                <div class="mt-8">
+                    <h3 class="text-lg font-semibold mb-2 text-gray-800 dark:text-white">方位角の分布</h3>
+                    <div class="w-full h-80">
+                        <canvas id="headingChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+<script>
+    // Global error handler for debugging
+    window.onerror = function(message, source, lineno, colno, error) {
+        console.error("Global Error Caught:", {
+            message: message,
+            source: source,
+            lineno: lineno,
+            colno: colno,
+            error: error ? error.stack : "No stack trace"
+        });
+        // Optionally, display a message to the user
+        // showMessage("エラーが発生しました: " + message, 5000);
+        return true; // Prevent default error handling
+    };
+
+    // --- UTILITIES ---
+    // A simplified, self-contained UTM conversion function. For production, a robust library is recommended.
+    // This is for demonstration purposes.
+    function latLngToUtm(lat, lng) {
+        // Simplified conversion for demonstration
+        const zone = Math.floor((lng + 180) / 6) + 1;
+        const letter = "CDEFGHJKLMNPQRSTUVWXX"[Math.floor((lat + 80) / 8)];
+        const utm_x = 500000 + (lng - (zone * 6 - 183)) * 111320;
+        const utm_y = lat > 0 ? lat * 111132.954 : lat * 110574.389;
+        return `${zone}${letter} ${utm_x.toFixed(2)} ${utm_y.toFixed(2)}`;
+    }
+
+    // --- GEOSPATIAL CALCULATIONS ---
+    // Haversine formula to calculate distance between two LatLng points on a sphere.
+    // Returns distance in meters.
+    function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // metres (Earth's mean radius)
+        const φ1 = lat1 * Math.PI / 180; // φ, λ in radians
+        const φ2 = lat2 * Math.PI / 180;
+        const Δφ = (lat2 - lat1) * Math.PI / 180;
+        const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                  Math.cos(φ1) * Math.cos(φ2) *
+                  Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        return R * c; // in meters
+    }
+
+    // Calculates elevation angle between two points given their LatLng and Altitude
+    // Returns angle in degrees
+    function calculateElevationAngle(lat1, lon1, alt1, lat2, lon2, alt2) {
+        console.log("--- Elevation Angle Calculation ---");
+        console.log(`Point 1: Lat=${lat1}, Lon=${lon1}, Alt=${alt1}`);
+        console.log(`Point 2: Lat=${lat2}, Lon=${lon2}, Alt=${alt2}`);
+
+        const R_EARTH = 6371e3; // Earth's mean radius in meters
+
+        const horizontalDistance = calculateHaversineDistance(lat1, lon1, lat2, lon2);
+        let verticalDistance = alt2 - alt1;
+
+        // --- Curvature Correction ---
+        // The effect of Earth's curvature causes the horizon to "drop" relative to a flat plane.
+        // For a line of sight from point 1 to point 2, if point 2 is further away,
+        // its effective altitude relative to a tangent plane at point 1 will be lower due to curvature.
+        // The correction is approximately d^2 / (2 * R_EARTH)
+        const curvatureCorrection = (horizontalDistance * horizontalDistance) / (2 * R_EARTH);
+        verticalDistance -= curvatureCorrection; // Subtract the drop due to curvature from the vertical distance
+
+        console.log(`Horizontal Distance: ${horizontalDistance.toFixed(2)} m`);
+        console.log(`Initial Vertical Distance: ${(alt2 - alt1).toFixed(2)} m`);
+        console.log(`Curvature Correction: ${curvatureCorrection.toFixed(2)} m`);
+        console.log(`Corrected Vertical Distance: ${verticalDistance.toFixed(2)} m`);
+
+        if (horizontalDistance === 0) {
+            console.log("Horizontal distance is zero.");
+            return verticalDistance > 0 ? 90 : (verticalDistance < 0 ? -90 : 0);
+        }
+
+        const angleRad = Math.atan2(verticalDistance, horizontalDistance);
+        const angleDeg = angleRad * 180 / Math.PI;
+        console.log(`Calculated Elevation Angle (with curvature): ${angleDeg.toFixed(2)} °`);
+        console.log("---------------------------------");
+        return angleDeg; // Convert to degrees
+    }
+
+    // Calculates the bearing (azimuth) from point 1 to point 2
+    // Returns bearing in degrees (0-360, 0=North, clockwise)
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+        const φ1 = lat1 * Math.PI / 180;
+        const φ2 = lat2 * Math.PI / 180;
+        const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+        const y = Math.sin(Δλ) * Math.cos(φ2);
+        const x = Math.cos(φ1) * Math.sin(φ2) -
+                  Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+        let bearingRad = Math.atan2(y, x);
+        
+        // Convert to degrees and normalize to 0-360
+        let bearingDeg = (bearingRad * 180 / Math.PI + 360) % 360;
+        return bearingDeg;
+    }
+
+
+    // --- CUSTOM LEAFLET TILE LAYER WITH CACHING ---
+    L.TileLayer.Cache = L.TileLayer.extend({
+        initialize: function (url, options) {
+            L.TileLayer.prototype.initialize.call(this, url, options);
+            this.cacheKey = options.cacheKey || 'leaflet-tile-cache';
+            this.useCache = options.useCache || false;
+        },
+
+        createTile: function (coords, done) {
+            const tile = document.createElement('img');
+            L.DomEvent.on(tile, 'load', L.Util.bind(this._tileOnLoad, this, done, tile));
+            L.DomEvent.on(tile, 'error', L.Util.bind(this._tileOnError, this, done, tile));
+
+            const tileUrl = this.getTileUrl(coords);
+            const cacheId = `${this.cacheKey}-${coords.z}-${coords.x}-${coords.y}`;
+
+            if (this.useCache) {
+                const cachedTile = localStorage.getItem(cacheId);
+                if (cachedTile) {
+                    tile.src = cachedTile;
+                    return tile;
+                }
+            }
+
+            // If not cached or caching is off, fetch from network
+            tile.src = tileUrl;
+
+            if (this.useCache) {
+                // Save to cache after loading. Use a small timeout to ensure image is fully rendered.
+                tile.onload = () => {
+                    setTimeout(() => { // Small delay to ensure image is drawn to canvas
+                        try {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = tile.naturalWidth;
+                            canvas.height = tile.naturalHeight;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(tile, 0, 0);
+                            localStorage.setItem(cacheId, canvas.toDataURL());
+                        } catch (e) {
+                            console.warn('Failed to cache tile (likely storage full):', e);
+                            // In a real application, you might implement a cache eviction strategy here.
+                        }
+                    }, 10); // Short delay
+                };
+            }
+            return tile;
+        }
+    });
+
+    L.tileLayer.cache = function (url, options) {
+        return new L.TileLayer.Cache(url, options);
+    };
+
+    // --- MAIN APPLICATION LOGIC ---
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- CONSTANTS AND STATE ---
+        const mapPanel = document.getElementById('mapPanel');
+        const controlPanel = document.getElementById('controlPanel');
+        const tabMap = document.getElementById('tabMap');
+        const tabControl = document.getElementById('tabControl');
+        
+        const latlngSpan = document.getElementById('latlng');
+        const utmSpan = document.getElementById('utm');
+        const headingSpan = document.getElementById('heading');
+        const gpsStatusSpan = document.getElementById('gpsStatus');
+        const sectorAngleInput = document.getElementById('sectorAngle');
+        const angleValSpan = document.getElementById('angleVal');
+        const symbolInfoContainer = document.getElementById('symbolInfoContainer'); // Get the new container
+        
+        const toggleLangBtn = document.getElementById('toggleLang');
+        const toggleSimBtn = document.getElementById('toggleSim');
+        const centerMapBtn = document.getElementById('centerMap');
+        const clearRouteBtn = document.getElementById('clearRoute');
+        const downloadLogBtn = document.getElementById('downloadLog');
+        const csvUploadInput = document.getElementById('csvUpload');
+        const toggleDebugBtn = document.getElementById('toggleDebug');
+        const servoBtn = document.getElementById('servoBtn');
+        const messageBox = document.getElementById('messageBox');
+        const toggleFollowBtn = document.getElementById('toggleFollow');
+        const useOfflineTilesCheckbox = document.getElementById('useOfflineTiles');
+        const clearCacheBtn = document.getElementById('clearCacheBtn');
+        const clearSymbolBtn = document.getElementById('clearSymbolBtn'); // New
+
+        let isJapanese = true;
+        let isSimulating = false;
+        let isDebugging = false;
+        let isFollowing = false;
+        let simulationInterval = null;
+        // currentPosition now includes altitude for elevation angle calculation
+        let currentPosition = [35.681236, 139.767125, 100]; // Default starting position (Tokyo, altitude 100m)
+        let currentHeading = 0;
+        let logData = [];
+        let routeCoordinates = [];
+        // symbolMarkers now stores objects: { marker: L.Marker, latLngAlt: [lat, lng, alt] }
+        let symbolMarkers = []; 
+        let lastKnownLatLng = [currentPosition[0], currentPosition[1]]; // Store initial LatLng for optimization
+
+        // Chart-related variables
+        let headingHistory = [];
+        let headingChart = null;
+
+        // --- MAP SETUP ---
+        let map = L.map('map').setView([currentPosition[0], currentPosition[1]], 16);
+        let osmLayer; // Declare here to be accessible globally in this scope
+
+        // Function to set or swap the tile layer based on caching preference
+        function setTileLayer(useCache) {
+            if (osmLayer) {
+                map.removeLayer(osmLayer);
+            }
+            osmLayer = L.tileLayer.cache('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                cacheKey: 'osm-tiles', // Unique key for this tile set in localStorage
+                useCache: useCache
+            }).addTo(map);
+        }
+
+        const gpsMarker = L.marker([currentPosition[0], currentPosition[1]]).addTo(map);
+        const routePolyline = L.polyline(routeCoordinates, { color: 'blue' }).addTo(map);
+
+        // A custom canvas layer to draw the heading line and sector
+        const HeadingSectorLayer = L.Layer.extend({
+            onAdd: function (map) {
+                this._map = map;
+                // Create a canvas element and append it to the `overlayPane`
+                this._el = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
+                
+                // Set initial size of the canvas
+                const size = map.getSize();
+                this._el.width = size.x;
+                this._el.height = size.y;
+                
+                // Append canvas to the map's overlay pane to ensure it's on top of tiles
+                this._map.getPane('overlayPane').appendChild(this._el);
+                this._ctx = this._el.getContext('2d');
+                
+                // Add event listeners for redrawing on map changes
+                this._map.on('moveend', this.redraw, this);
+                this._map.on('resize', this.redraw, this);
+                
+                // Initial draw
+                this.redraw();
+            },
+
+            onRemove: function (map) {
+                // Remove the canvas element and event listeners
+                this._map.getPane('overlayPane').removeChild(this._el);
+                this._map.off('moveend', this.redraw, this);
+                this._map.off('resize', this.redraw, this);
+            },
+            
+            // Public method to trigger a redraw
+            // Removed parameters as it will now access global variables directly
+            redraw: function () { 
+                console.log("HeadingSectorLayer.redraw called."); // Debugging log
+                const map = this._map;
+                if (!map || !gpsMarker || !this._el || !this._ctx) { 
+                    console.warn("HeadingSectorLayer.redraw: Missing map, gpsMarker, canvas element, or context. Skipping redraw.");
+                    return;
+                }
+                
+                try { 
+                    // Update canvas size on resize
+                    const size = map.getSize();
+                    if (this._el.width !== size.x || this._el.height !== size.y) {
+                        this._el.width = size.x;
+                        this._el.height = size.y;
+                    }
+                    
+                    const ctx = this._ctx;
+                    // Clear the canvas
+                    ctx.clearRect(0, 0, this._el.width, this._el.height);
+                    
+                    // Get the center point from the marker's position
+                    const centerPoint = map.latLngToLayerPoint(gpsMarker.getLatLng());
+                    
+                    // Calculate dynamic radii based on map height
+                    const mapHeight = map.getSize().y;
+                    const lineRadius = mapHeight * 0.4;
+                    const sectorRadius = mapHeight * 0.3;
+
+                    // Draw the heading line
+                    if (currentHeading !== null) {
+                        const lineAngle = (currentHeading - 90) * (Math.PI / 180);
+                        const endPointX = centerPoint.x + lineRadius * Math.cos(lineAngle);
+                        const endPointY = centerPoint.y + lineRadius * Math.sin(lineAngle);
+                        ctx.beginPath();
+                        ctx.moveTo(centerPoint.x, centerPoint.y);
+                        ctx.lineTo(endPointX, endPointY);
+                        ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+                        ctx.lineWidth = 3;
+                        ctx.stroke();
+                    }
+
+                    // Draw the sector
+                    if (currentHeading !== null) {
+                        const angle = parseInt(sectorAngleInput.value);
+                        // Convert currentHeading (compass 0=North, clockwise) to Canvas angle (0=East, clockwise)
+                        const canvasHeading = (currentHeading - 90 + 360) % 360; // Ensure positive angle
+                        
+                        const startAngleDegrees = (canvasHeading - angle / 2 + 360) % 360;
+                        const endAngleDegrees = (canvasHeading + angle / 2 + 360) % 360;
+
+                        // Convert to radians for Canvas arc function
+                        const startAngleRad = startAngleDegrees * (Math.PI / 180);
+                        const endAngleRad = endAngleDegrees * (Math.PI / 180);
+
+                        ctx.beginPath();
+                        ctx.moveTo(centerPoint.x, centerPoint.y);
+                        ctx.arc(centerPoint.x, centerPoint.y, sectorRadius, startAngleRad, endAngleRad, false); // false for clockwise
+                        ctx.closePath();
+                        ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+                        ctx.fill();
+                    }
+
+                    // Draw lines to symbols
+                    // Access global symbolMarkers directly
+                    symbolMarkers.forEach(symbolObj => {
+                        const { marker, latLngAlt } = symbolObj;
+                        const [sLat, sLng, sAlt] = latLngAlt;
+
+                        const symbolPoint = map.latLngToLayerPoint(marker.getLatLng());
+                        
+                        // Calculate bearing from self to symbol
+                        const bearingToSymbol = calculateBearing(currentPosition[0], currentPosition[1], sLat, sLng);
+                        
+                        // Calculate angular difference, handling 360-degree wrap-around
+                        let bearingDiff = Math.abs(currentHeading - bearingToSymbol);
+                        if (bearingDiff > 180) {
+                            bearingDiff = 360 - bearingDiff;
+                        }
+
+                        ctx.beginPath();
+                        ctx.moveTo(centerPoint.x, centerPoint.y);
+                        ctx.lineTo(symbolPoint.x, symbolPoint.y);
+
+                        if (bearingDiff <= 10) {
+                            ctx.strokeStyle = 'blue';
+                            ctx.setLineDash([]); // Solid line
+                        } else {
+                            ctx.strokeStyle = 'black';
+                            ctx.setLineDash([5, 5]); // Dashed line
+                        }
+                        ctx.lineWidth = 2; // Make lines slightly thicker for visibility
+                        ctx.stroke();
+                    });
+                    ctx.setLineDash([]); // Reset line dash for other drawings if any
+                } catch (e) {
+                    console.error("Error drawing HeadingSectorLayer:", e);
+                }
+            }
+        });
+        
+        // Add the custom layer to the map
+        const headingSectorLayer = new HeadingSectorLayer().addTo(map);
+        console.log("headingSectorLayer after creation:", headingSectorLayer); // Debugging line
+
+        // --- CHART FUNCTIONS ---
+        function initHeadingChart() {
+            const ctx = document.getElementById('headingChart').getContext('2d');
+            const data = {
+                labels: Array.from({ length: 36 }, (_, i) => `${i * 10}°`),
+                datasets: [{
+                    label: isJapanese ? '方位角の分布' : 'Heading Distribution',
+                    data: new Array(36).fill(0),
+                    backgroundColor: [
+                        'rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(255, 206, 86, 0.5)',
+                        'rgba(75, 192, 192, 0.5)', 'rgba(153, 102, 255, 0.5)', 'rgba(255, 159, 64, 0.5)',
+                        'rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(255, 206, 86, 0.5)',
+                        'rgba(75, 192, 192, 0.5)', 'rgba(153, 102, 255, 0.5)', 'rgba(255, 159, 64, 0.5)',
+                        'rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(255, 206, 86, 0.5)',
+                        'rgba(75, 192, 192, 0.5)', 'rgba(153, 102, 255, 0.5)', 'rgba(255, 159, 64, 0.5)',
+                        'rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(255, 206, 86, 0.5)',
+                        'rgba(75, 192, 192, 0.5)', 'rgba(153, 102, 255, 0.5)', 'rgba(255, 159, 64, 0.5)',
+                        'rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(255, 206, 86, 0.5)',
+                    ]
+                }]
+            };
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    r: {
+                        angleLines: {
+                            display: true
+                        },
+                        suggestedMin: 0,
+                        ticks: {
+                            backdropColor: 'transparent',
+                            showLabelBackdrop: false
+                        }
+                    }
+                }
+            };
+            headingChart = new Chart(ctx, {
+                type: 'polarArea',
+                data: data,
+                options: options
+            });
+        }
+
+        function updateHeadingChart(newHeading) {
+            headingHistory.push(newHeading);
+
+            // Create bins for the polar area chart (0-360 degrees, 10-degree segments)
+            const bins = new Array(36).fill(0);
+            headingHistory.forEach(hdg => {
+                const binIndex = Math.floor(hdg / 10);
+                if (binIndex >= 0 && binIndex < 36) {
+                    bins[binIndex]++;
+                }
+            });
+            
+            // Update the chart dataset
+            if (headingChart) {
+                headingChart.data.datasets[0].data = bins;
+                headingChart.update();
+            }
+        }
+
+        // --- Function to update symbol information in the UI ---
+        function updateSymbolInfoUI() {
+            symbolInfoContainer.innerHTML = ''; // Clear previous info
+
+            if (symbolMarkers.length === 0) {
+                // Display default placeholder if no symbols
+                symbolInfoContainer.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="シンボル距離" data-label-en="Symbol Distance" class="font-bold">シンボル距離</span>: 
+                        <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="仰俯角" data-label-en="Elevation Angle" class="font-bold">仰俯角</span>: 
+                        <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
+                `;
+                return;
+            }
+
+            symbolMarkers.forEach((symbolObj, index) => {
+                const { latLngAlt } = symbolObj;
+                const [sLat, sLng, sAlt] = latLngAlt;
+
+                const dist = calculateHaversineDistance(currentPosition[0], currentPosition[1], sLat, sLng);
+                const elevAngle = calculateElevationAngle(currentPosition[0], currentPosition[1], currentPosition[2], sLat, sLng, sAlt);
+                const bearingDeg = calculateBearing(currentPosition[0], currentPosition[1], sLat, sLng);
+                const bearingRad = bearingDeg * Math.PI / 180;
+                const bearingMil = bearingDeg * (6400 / 360); // 1 degree = 6400 mils / 360 degrees
+
+                const symbolDiv = document.createElement('div');
+                symbolDiv.className = 'col-span-1 flex flex-col space-y-1 p-2 bg-gray-100 dark:bg-gray-600 rounded-md shadow-sm';
+                symbolDiv.innerHTML = `
+                    <span class="font-bold text-blue-700 dark:text-blue-300">シンボル ${index + 1}</span>
+                    <div class="flex items-center space-x-2 text-xs">
+                        <span class="font-bold">距離</span>: 
+                        <span class="font-mono text-gray-700 dark:text-gray-200">${dist.toFixed(2)} m</span>
+                    </div>
+                    <div class="flex items-center space-x-2 text-xs">
+                        <span class="font-bold">仰俯角</span>: 
+                        <span class="font-mono text-gray-700 dark:text-gray-200">${elevAngle.toFixed(2)} °</span>
+                    </div>
+                    <div class="flex items-center space-x-2 text-xs">
+                        <span class="font-bold">方位角</span>: 
+                        <span class="font-mono text-gray-700 dark:text-gray-200">${bearingDeg.toFixed(2)}° / ${bearingRad.toFixed(2)} rad / ${bearingMil.toFixed(2)} mil</span>
+                    </div>
+                `;
+                symbolInfoContainer.appendChild(symbolDiv);
+            });
+        }
+        
+        // --- UTILITY FUNCTIONS ---
+        // updateAllUI now accepts altitude for current position
+        function updateAllUI(lat, lng, heading, alt = currentPosition[2]) { // Default to current altitude if not provided
+            const utm = latLngToUtm(lat, lng);
+            const latLngFormatted = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            const headingFormatted = `${heading.toFixed(2)}°`;
+
+            latlngSpan.textContent = latLngFormatted;
+            utmSpan.textContent = utm;
+            headingSpan.textContent = headingFormatted;
+            
+            // Update map elements only if LatLng has changed
+            const newLatLng = L.latLng(lat, lng);
+            if (lat !== lastKnownLatLng[0] || lng !== lastKnownLatLng[1]) {
+                gpsMarker.setLatLng(newLatLng);
+                routeCoordinates.push(newLatLng);
+                routePolyline.setLatLngs(routeCoordinates);
+                lastKnownLatLng = [lat, lng]; // Update lastKnownLatLng
+            }
+            
+            // Update currentPosition with new altitude
+            currentPosition = [lat, lng, alt];
+
+            // Calculate and display distance and elevation angle for all symbols
+            updateSymbolInfoUI(); // Call the new function
+
+            // Conditionally recenter the map if following is enabled
+            if (isFollowing) {
+                map.setView(newLatLng, map.getZoom());
+            }
+            
+            // Redraw the custom layer and update the chart
+            currentHeading = heading;
+            // Defensive check before calling redraw
+            if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
+                console.log("Calling headingSectorLayer.redraw from updateAllUI."); // Debugging log
+                // Pass no arguments as redraw now accesses global variables
+                headingSectorLayer.redraw(); 
+            } else {
+                console.error("headingSectorLayer.redraw is not a function or headingSectorLayer is not defined.");
+            }
+            updateHeadingChart(currentHeading);
+        }
+
+        function showMessage(message, duration = 3000) {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden');
+            messageBox.classList.add('show');
+            setTimeout(() => {
+                messageBox.classList.remove('show');
+                setTimeout(() => messageBox.classList.add('hidden'), 500);
+            }, duration);
+        }
+
+        // --- SIMULATION AND DATA HANDLING ---
+        function startSimulation() {
+            if (simulationInterval) clearInterval(simulationInterval);
+            isSimulating = true;
+            toggleSimBtn.textContent = isJapanese ? 'シミュレーター停止' : 'Stop Simulator';
+            toggleSimBtn.classList.remove('bg-yellow-400');
+            toggleSimBtn.classList.add('bg-gray-400');
+            showMessage(isJapanese ? "シミュレーター起動しました。" : "Simulator started.", 2000);
+
+            const speed = 0.00001; // Movement speed
+            let currentLat = currentPosition[0];
+            let currentLng = currentPosition[1];
+            let currentAlt = currentPosition[2]; // Use current altitude
+            let currentHdg = currentHeading;
+
+            simulationInterval = setInterval(() => {
+                console.log("Simulating and updating UI..."); // Debugging log
+                // Simulate movement
+                currentHdg = (currentHdg + (Math.random() - 0.5) * 5) % 360;
+                currentLat += Math.cos(currentHdg * Math.PI / 180) * speed;
+                currentLng += Math.sin(currentHdg * Math.PI / 180) * speed;
+                currentAlt += (Math.random() - 0.5) * 5; // Simulate more significant altitude change for testing elevation angle
+
+                // Clamp lat/lng
+                currentLat = Math.max(-90, Math.min(90, currentLat));
+                currentLng = Math.max(-180, Math.min(180, currentLng));
+
+                updateAllUI(currentLat, currentLng, currentHdg, currentAlt); // Pass altitude
+                // currentPosition is already updated inside updateAllUI
+                logData.push({
+                    timestamp: new Date().toISOString(),
+                    lat: currentLat,
+                    lng: currentLng,
+                    heading: currentHdg,
+                    alt: currentAlt, // Log altitude
+                    status: 'RTK-FIX'
+                });
+            }, 500);
+        }
+
+        function stopSimulation() {
+            isSimulating = false;
+            clearInterval(simulationInterval);
+            toggleSimBtn.textContent = isJapanese ? 'シミュレーター起動' : 'Start Simulator';
+            toggleSimBtn.classList.remove('bg-gray-400');
+            toggleSimBtn.classList.add('bg-yellow-400');
+            showMessage(isJapanese ? "シミュレーター停止しました。" : "Simulator stopped.", 2000);
+        }
+
+        // CSV Playback
+        function playCsvData(data) {
+            let index = 0;
+            const interval = setInterval(() => {
+                console.log("Playing CSV data and updating UI..."); // Debugging log
+                if (index < data.length) {
+                    const row = data[index];
+                    // Ensure altitude is read from CSV if available, otherwise default to 0
+                    const alt = parseFloat(row.alt) || 0; 
+                    updateAllUI(parseFloat(row.lat), parseFloat(row.lng), parseFloat(row.heading), alt);
+                    gpsStatusSpan.textContent = row.status;
+                    gpsStatusSpan.style.color = 'green';
+                    
+                    // currentPosition is already updated inside updateAllUI
+                    index++;
+                } else {
+                    clearInterval(interval);
+                    showMessage(isJapanese ? "CSV再生が完了しました。" : "CSV playback complete.", 3000);
+                }
+            }, 500);
+        }
+
+        // --- EVENT LISTENERS ---
+        // Tab switching
+        tabMap.addEventListener('click', () => {
+            tabMap.classList.add('active');
+            tabControl.classList.remove('active');
+            mapPanel.classList.remove('hidden');
+            controlPanel.classList.add('hidden');
+            // Invalidate map size to fix display issues after showing a hidden tab
+            setTimeout(() => {
+                map.invalidateSize();
+                // Defensive check before calling redraw
+                if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
+                    console.log("Calling headingSectorLayer.redraw on tab switch."); // Debugging log
+                    headingSectorLayer.redraw(); // No arguments needed now
+                } else {
+                    console.error("headingSectorLayer.redraw is not a function or headingSectorLayer is not defined on tab switch.");
+                }
+                centerMap();
+            }, 100);
+        });
+
+        tabControl.addEventListener('click', () => {
+            tabControl.classList.add('active');
+            tabMap.classList.remove('active');
+            controlPanel.classList.remove('hidden');
+            mapPanel.classList.add('hidden');
+        });
+
+        // Toggle language
+        toggleLangBtn.addEventListener('click', () => {
+            isJapanese = !isJapanese;
+            document.querySelectorAll('[data-label-ja]').forEach(el => {
+                const textContent = isJapanese ? el.getAttribute('data-label-ja') : el.getAttribute('data-label-en');
+                // Only update text content for elements that are not part of the dynamic symbol info
+                if (!el.closest('#symbolInfoContainer')) {
+                    el.textContent = textContent;
+                }
+            });
+            // Update button texts
+            toggleLangBtn.textContent = isJapanese ? '🌐 言語' : '🌐 Language';
+            downloadLogBtn.textContent = isJapanese ? 'ログ保存' : 'Save Log';
+            clearRouteBtn.textContent = isJapanese ? 'ルートクリア' : 'Clear Route';
+            servoBtn.textContent = isJapanese ? 'サーボ制御（仮想）' : 'Servo Control (Virtual)';
+            document.querySelector('[for="csvUpload"]').textContent = isJapanese ? 'CSV再生' : 'Play CSV';
+            clearCacheBtn.textContent = isJapanese ? 'キャッシュクリア' : 'Clear Cache';
+            clearSymbolBtn.textContent = isJapanese ? 'シンボルクリア' : 'Clear Symbols'; // Updated text for multiple symbols
+            
+            if (isSimulating) {
+                toggleSimBtn.textContent = isJapanese ? 'シミュレーター停止' : 'Stop Simulator';
+            } else {
+                toggleSimBtn.textContent = isJapanese ? 'シミュレーター起動' : 'Start Simulator';
+            }
+
+            // Update the new follow button
+            if (isFollowing) {
+                toggleFollowBtn.textContent = isJapanese ? '追従: ON' : 'Follow: ON';
+            } else {
+                toggleFollowBtn.textContent = isJapanese ? '追従: OFF' : 'Follow: OFF';
+            }
+
+            // Update chart label
+            if (headingChart) {
+                headingChart.data.datasets[0].label = isJapanese ? '方位角の分布' : 'Heading Distribution';
+                headingChart.update();
+            }
+            // Re-render symbol info to apply language change
+            updateSymbolInfoUI();
+        });
+
+        // Toggle simulation
+        toggleSimBtn.addEventListener('click', () => {
+            if (isSimulating) {
+                stopSimulation();
+            } else {
+                startSimulation();
+            }
+        });
+        
+        // Toggle follow mode
+        toggleFollowBtn.addEventListener('click', () => {
+            isFollowing = !isFollowing;
+            if (isFollowing) {
+                toggleFollowBtn.textContent = isJapanese ? '追従: ON' : 'Follow: ON';
+                toggleFollowBtn.classList.remove('bg-gray-200');
+                toggleFollowBtn.classList.add('bg-blue-400');
+                map.setView([currentPosition[0], currentPosition[1]], map.getZoom()); // Center immediately
+            } else {
+                toggleFollowBtn.textContent = isJapanese ? '追従: OFF' : 'Follow: OFF';
+                toggleFollowBtn.classList.remove('bg-blue-400');
+                toggleFollowBtn.classList.add('bg-gray-200');
+            }
+        });
+
+        // Center map on current position
+        centerMapBtn.addEventListener('click', () => {
+            centerMap();
+        });
+
+        function centerMap() {
+            if (currentPosition) {
+                map.setView([currentPosition[0], currentPosition[1]], 16);
+            }
+        }
+
+        // Clear route
+        clearRouteBtn.addEventListener('click', () => {
+            routeCoordinates = [];
+            routePolyline.setLatLngs(routeCoordinates);
+            headingHistory = []; // Clear heading data
+            if (headingChart) {
+                headingChart.data.datasets[0].data = new Array(36).fill(0);
+                headingChart.update();
+            }
+            showMessage(isJapanese ? "ルートとグラフデータをクリアしました。" : "Cleared route and graph data.", 2000);
+        });
+
+        // Download log
+        downloadLogBtn.addEventListener('click', () => {
+            if (logData.length === 0) {
+                showMessage(isJapanese ? "ログデータがありません。" : "No log data available.", 2000);
+                return;
+            }
+            const csvRows = ["timestamp,lat,lng,heading,alt,status"]; // Added alt to header
+            logData.forEach(row => {
+                csvRows.push(`${row.timestamp},${row.lat},${row.lng},${row.heading},${row.alt},${row.status}`);
+            });
+            const csvContent = csvRows.join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `gnss_log_${new Date().toISOString()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showMessage(isJapanese ? "ログを保存しました。" : "Log saved.", 2000);
+        });
+
+        // Handle CSV upload
+        csvUploadInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const csvText = event.target.result;
+                const rows = csvText.split('\n').slice(1); // Skip header
+                const data = rows.map(row => {
+                    const parts = row.split(',');
+                    return { 
+                        timestamp: parts[0], 
+                        lat: parts[1], 
+                        lng: parts[2], 
+                        heading: parts[3], 
+                        alt: parts[4] ? parseFloat(parts[4]) : 0, // Ensure alt is parsed as float, default to 0
+                        status: parts[5] 
+                    };
+                }).filter(item => !isNaN(parseFloat(item.lat))); // Filter out bad rows
+
+                if (data.length > 0) {
+                    stopSimulation();
+                    clearRouteBtn.click();
+                    playCsvData(data);
+                } else {
+                    showMessage(isJapanese ? "CSVファイルの読み込みに失敗しました。" : "Failed to load CSV file.", 3000);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // Toggle debug state
+        toggleDebugBtn.addEventListener('click', () => {
+            isDebugging = !isDebugging;
+            if (isDebugging) {
+                toggleDebugBtn.textContent = 'Debug: ON';
+                gpsStatusSpan.textContent = 'DEBUG-ON';
+                gpsStatusSpan.style.color = 'orange';
+            } else {
+                toggleDebugBtn.textContent = 'Debug: OFF';
+                gpsStatusSpan.textContent = 'RTK-FIX';
+                gpsStatusSpan.style.color = 'green';
+            }
+        });
+
+        // Handle servo button (virtual)
+        servoBtn.addEventListener('click', () => {
+            showMessage(isJapanese ? "仮想サーボ制御コマンドを送信しました。" : "Sent virtual servo control command.", 2000);
+        });
+
+        // Handle range input for sector angle
+        sectorAngleInput.addEventListener('input', () => {
+            angleValSpan.textContent = sectorAngleInput.value;
+            // Defensive check before calling redraw
+            if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
+                console.log("Calling headingSectorLayer.redraw on angle change."); // Debugging log
+                headingSectorLayer.redraw(); // No arguments needed now
+            } else {
+                console.error("headingSectorLayer.redraw is not a function or headingSectorLayer is not defined on angle change.");
+            }
+        });
+
+        // Handle offline tiles checkbox
+        useOfflineTilesCheckbox.addEventListener('change', () => {
+            setTileLayer(useOfflineTilesCheckbox.checked); // Reinitialize layers when cache option changes
+            showMessage(useOfflineTilesCheckbox.checked ? (isJapanese ? "タイルキャッシュを有効にしました。" : "Tile caching enabled.") : (isJapanese ? "タイルキャッシュを無効にしました。" : "Tile caching disabled."), 2000);
+        });
+
+        // Handle clear cache button
+        clearCacheBtn.addEventListener('click', () => {
+            // Clear only tiles associated with our cacheKey
+            for (let i = localStorage.length - 1; i >= 0; i--) { // Iterate backwards to avoid issues with changing length
+                const key = localStorage.key(i);
+                if (key.startsWith('osm-tiles-')) {
+                    localStorage.removeItem(key);
+                }
+            }
+            setTileLayer(useOfflineTilesCheckbox.checked); // Reload tiles from scratch
+            showMessage(isJapanese ? "タイルキャッシュをクリアしました。" : "Tile cache cleared.", 2000);
+        });
+
+        // Handle map click to add a new symbol
+        map.on('click', (e) => {
+            const clickedLat = e.latlng.lat;
+            const clickedLng = e.latlng.lng;
+            // For simplicity, assume symbol altitude is same as current GPS altitude for now
+            // In a real scenario, you'd fetch this from a DEM or user input
+            const clickedAlt = currentPosition[2]; 
+
+            const newMarker = L.marker([clickedLat, clickedLng], { draggable: true }).addTo(map);
+            const newSymbolObj = { marker: newMarker, latLngAlt: [clickedLat, clickedLng, clickedAlt] };
+            symbolMarkers.push(newSymbolObj); // Add new marker object to the array
+            
+            // Add dragend listener to the new marker
+            newMarker.on('dragend', (dragEvent) => {
+                const draggedLatLng = dragEvent.target.getLatLng();
+                // Find the symbol object in the array and update its latLngAlt
+                const draggedSymbolIndex = symbolMarkers.findIndex(s => s.marker === dragEvent.target);
+                if (draggedSymbolIndex !== -1) {
+                    // Update the altitude of the dragged symbol to current GPS altitude for simplicity
+                    symbolMarkers[draggedSymbolIndex].latLngAlt = [draggedLatLng.lat, draggedLatLng.lng, currentPosition[2]];
+                }
+                updateAllUI(currentPosition[0], currentPosition[1], currentHeading, currentPosition[2]); // Update UI
+                showMessage(isJapanese ? "シンボルをドラッグして移動しました。" : "Symbol dragged and moved.", 2000);
+            });
+
+            // Update all symbol info immediately after adding a new one
+            updateAllUI(currentPosition[0], currentPosition[1], currentHeading, currentPosition[2]);
+
+            showMessage(isJapanese ? "シンボルを追加しました。" : "Symbol added.", 2000);
+        });
+
+        // Handle map right-click to set self-position
+        map.on('contextmenu', (e) => {
+            const newLat = e.latlng.lat;
+            const newLng = e.latlng.lng;
+            const currentAlt = currentPosition[2]; // Keep current altitude
+
+            // Stop simulation if running
+            if (isSimulating) {
+                stopSimulation();
+            }
+
+            // Clear the existing route
+            clearRouteBtn.click();
+
+            // Update self-position and UI
+            updateAllUI(newLat, newLng, currentHeading, currentAlt);
+            showMessage(isJapanese ? `自己位置を ${newLat.toFixed(6)}, ${newLng.toFixed(6)} に移動しました。` : `Self-position moved to ${newLat.toFixed(6)}, ${newLng.toFixed(6)}.`, 3000);
+        });
+
+        // Handle clear symbol button
+        clearSymbolBtn.addEventListener('click', () => {
+            if (symbolMarkers.length > 0) {
+                symbolMarkers.forEach(symbolObj => {
+                    map.removeLayer(symbolObj.marker); // Remove each marker from the map
+                });
+                symbolMarkers = []; // Clear the array
+                updateSymbolInfoUI(); // Clear the UI display
+                showMessage(isJapanese ? "すべてのシンボルをクリアしました。" : "All symbols cleared.", 2000);
+            } else {
+                showMessage(isJapanese ? "クリアするシンボルがありません。" : "No symbols to clear.", 2000);
+            }
+        });
+
+
+        // Initial UI state setup
+        gpsStatusSpan.textContent = 'RTK-FIX';
+        gpsStatusSpan.style.color = 'green';
+        
+        // Initialize the heading chart
+        initHeadingChart();
+
+        // Initial tile layer setup based on checkbox state
+        setTileLayer(useOfflineTilesCheckbox.checked);
+
+        // Initial update of UI values after all setup is complete
+        updateAllUI(currentPosition[0], currentPosition[1], currentHeading, currentPosition[2]);
+    });
+</script>
+</html>
