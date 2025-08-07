@@ -123,6 +123,10 @@
                             <span data-label-ja="仰俯角" data-label-en="Elevation Angle" class="font-bold">仰俯角</span>: 
                             <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
                         </div>
+                        <div class="flex items-center space-x-2">
+                            <span data-label-ja="自由空間損失" data-label-en="FSPL" class="font-bold">自由空間損失</span>: 
+                            <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                        </div>
                     </div>
                     <div class="flex items-center space-x-2">
                         <label class="flex items-center space-x-1 cursor-pointer">
@@ -136,6 +140,13 @@
                             <span id="angleVal" class="font-mono text-blue-600">30</span>°
                         </label>
                         <input type="range" id="sectorAngle" min="10" max="180" value="30" oninput="document.getElementById('angleVal').textContent = this.value">
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <label for="frequencyInput" class="text-gray-700 dark:text-gray-200">
+                            <span data-label-ja="周波数" data-label-en="Frequency">周波数</span>: 
+                        </label>
+                        <input type="number" id="frequencyInput" value="300" min="1" class="w-24 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <span class="text-gray-700 dark:text-gray-200">MHz</span>
                     </div>
                 </div>
 
@@ -300,6 +311,19 @@
         return bearingDeg;
     }
 
+    // Calculates Free Space Path Loss (FSPL) in dB
+    // d is distance in meters, freqMHz is frequency in MHz
+    function calculateFreeSpacePathLoss(d, freqMHz) {
+        if (d <= 0 || freqMHz <= 0) {
+            return NaN; // Invalid input
+        }
+        // FSPL (dB) = 20 log10(d_km) + 20 log10(f_MHz) + 32.44
+        // Convert distance from meters to kilometers
+        const d_km = d / 1000;
+        const fspl = 20 * Math.log10(d_km) + 20 * Math.log10(freqMHz) + 32.44;
+        return fspl;
+    }
+
 
     // --- CUSTOM LEAFLET TILE LAYER WITH CACHING ---
     L.TileLayer.Cache = L.TileLayer.extend({
@@ -371,7 +395,8 @@
         const sectorAngleInput = document.getElementById('sectorAngle');
         const angleValSpan = document.getElementById('angleVal');
         const symbolInfoContainer = document.getElementById('symbolInfoContainer'); // Get the new container
-        
+        const frequencyInput = document.getElementById('frequencyInput'); // New: Frequency input
+
         const toggleLangBtn = document.getElementById('toggleLang');
         const toggleSimBtn = document.getElementById('toggleSim');
         const centerMapBtn = document.getElementById('centerMap');
@@ -676,9 +701,21 @@
                         <span data-label-ja="仰俯角" data-label-en="Elevation Angle" class="font-bold">仰俯角</span>: 
                         <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
                     </div>
+                    <div class="flex items-center space-x-2">
+                        <span data-label-ja="自由空間損失" data-label-en="FSPL" class="font-bold">自由空間損失</span>: 
+                        <span class="font-mono text-gray-600 dark:text-gray-300">--</span>
+                    </div>
                 `;
                 return;
             }
+
+            const currentFreqMHz = parseFloat(frequencyInput.value);
+            if (isNaN(currentFreqMHz) || currentFreqMHz <= 0) {
+                showMessage(isJapanese ? "有効な周波数を入力してください。" : "Please enter a valid frequency.", 3000);
+                // Fallback to a default value or prevent FSPL calculation
+                // For now, we'll just not display FSPL if frequency is invalid.
+            }
+
 
             symbolMarkers.forEach((symbolObj, index) => {
                 const { latLngAlt } = symbolObj;
@@ -689,6 +726,12 @@
                 const bearingDeg = calculateBearing(currentPosition[0], currentPosition[1], sLat, sLng);
                 const bearingRad = bearingDeg * Math.PI / 180;
                 const bearingMil = bearingDeg * (6400 / 360); // 1 degree = 6400 mils / 360 degrees
+                
+                let fsplText = '--';
+                if (!isNaN(currentFreqMHz) && currentFreqMHz > 0) {
+                    const fspl = calculateFreeSpacePathLoss(dist, currentFreqMHz);
+                    fsplText = `${fspl.toFixed(2)} dB`;
+                }
 
                 const symbolDiv = document.createElement('div');
                 symbolDiv.className = 'col-span-1 flex flex-col space-y-1 p-2 bg-gray-100 dark:bg-gray-600 rounded-md shadow-sm';
@@ -705,6 +748,10 @@
                     <div class="flex items-center space-x-2 text-xs">
                         <span class="font-bold">方位角</span>: 
                         <span class="font-mono text-gray-700 dark:text-gray-200">${bearingDeg.toFixed(2)}° / ${bearingRad.toFixed(2)} rad / ${bearingMil.toFixed(2)} mil</span>
+                    </div>
+                    <div class="flex items-center space-x-2 text-xs">
+                        <span class="font-bold">自由空間損失</span>: 
+                        <span class="font-mono text-gray-700 dark:text-gray-200">${fsplText}</span>
                     </div>
                 `;
                 symbolInfoContainer.appendChild(symbolDiv);
@@ -873,6 +920,7 @@
             document.querySelector('label[for="csvUpload"]').textContent = isJapanese ? 'CSV再生' : 'Play CSV';
             document.querySelector('#controlPanel h2').textContent = isJapanese ? '制御・グラフ' : 'Control & Charts';
             document.querySelector('#controlPanel h3').textContent = isJapanese ? '方位角の分布' : 'Heading Distribution';
+            document.querySelector('label[for="frequencyInput"]').textContent = isJapanese ? '周波数' : 'Frequency'; // New: Language for frequency label
             
             // Update the chart label
             if (headingChart) {
@@ -983,6 +1031,13 @@
                 console.error("headingSectorLayer.redraw is not a function or headingSectorLayer is not defined on angle change.");
             }
         });
+
+        // Handle frequency input change
+        frequencyInput.addEventListener('input', () => {
+            console.log("Frequency input changed.");
+            updateSymbolInfoUI(); // Recalculate and update FSPL when frequency changes
+        });
+
 
         // Handle offline tiles checkbox
         useOfflineTilesCheckbox.addEventListener('change', () => {
