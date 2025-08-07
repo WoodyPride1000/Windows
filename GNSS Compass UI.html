@@ -22,14 +22,16 @@
         }
 
         body {
-            font-family: 'Inter', sans-serif;
+            margin: 0; /* Added margin: 0 */
+            font-family: 'Inter', sans-serif; /* Kept Inter font, added sans-serif fallback */
             color: var(--text-color);
             background-color: var(--bg-color);
         }
 
         /* Set a fixed height for the map container */
         #map {
-            height: 500px;
+            width: 100%; /* Ensure full width */
+            height: 60vh; /* Changed to 60vh for better mobile viewing */
         }
 
         /* Style for the active tab */
@@ -56,6 +58,11 @@
 
         #messageBox.show {
             opacity: 1;
+        }
+
+        /* Apply 60vh height to the chart canvas as well for consistency */
+        #headingChart {
+            height: 60vh;
         }
     </style>
     <!-- Leaflet JS -->
@@ -194,6 +201,7 @@
     </div>
 </body>
 <script>
+    console.log("Script execution started."); // スクリプトの実行開始をログ
     // Global error handler for debugging
     window.onerror = function(message, source, lineno, colno, error) {
         console.error("Global Error Caught:", {
@@ -348,6 +356,8 @@
 
     // --- MAIN APPLICATION LOGIC ---
     document.addEventListener('DOMContentLoaded', () => {
+        console.log("DOMContentLoaded fired."); // DOMContentLoadedイベントの発生をログ
+
         // --- CONSTANTS AND STATE ---
         const mapPanel = document.getElementById('mapPanel');
         const controlPanel = document.getElementById('controlPanel');
@@ -418,7 +428,7 @@
             onAdd: function (map) {
                 this._map = map;
                 // Create a canvas element and append it to the `overlayPane`
-                this._el = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
+                this._el = L.DomUtil.create('canvas', 'leaflet-zoom-animated'); // Keep leaflet-zoom-animated for initial positioning
                 
                 // Set initial size of the canvas
                 const size = map.getSize();
@@ -432,6 +442,8 @@
                 // Add event listeners for redrawing on map changes
                 this._map.on('moveend', this.redraw, this);
                 this._map.on('resize', this.redraw, this);
+                this._map.on('zoomend', this.redraw, this); // Add zoomend listener
+                this._map.on('viewreset', this.redraw, this); // Add viewreset listener as well, for good measure
                 
                 // Initial draw
                 this.redraw();
@@ -442,12 +454,17 @@
                 this._map.getPane('overlayPane').removeChild(this._el);
                 this._map.off('moveend', this.redraw, this);
                 this._map.off('resize', this.redraw, this);
+                this._map.off('zoomend', this.redraw, this); // Remove zoomend listener
+                this._map.off('viewreset', this.redraw, this); // Remove viewreset listener
             },
             
             // Public method to trigger a redraw
-            // Removed parameters as it will now access global variables directly
             redraw: function () { 
                 console.log("HeadingSectorLayer.redraw called."); // Debugging log
+                console.log("Inside redraw - currentPosition:", currentPosition); // ログを追加
+                console.log("Inside redraw - currentHeading:", currentHeading); // ログを追加
+                console.log("Inside redraw - symbolMarkers:", symbolMarkers); // ログを追加
+
                 const map = this._map;
                 if (!map || !gpsMarker || !this._el || !this._ctx) { 
                     console.warn("HeadingSectorLayer.redraw: Missing map, gpsMarker, canvas element, or context. Skipping redraw.");
@@ -455,24 +472,47 @@
                 }
                 
                 try { 
-                    // Update canvas size on resize
                     const size = map.getSize();
+                    // Get the top-left pixel coordinates of the map pane
+                    const topLeft = map.containerPointToLayerPoint([0, 0]);
+
+                    // Set canvas size
                     if (this._el.width !== size.x || this._el.height !== size.y) {
                         this._el.width = size.x;
                         this._el.height = size.y;
+                        console.log(`Canvas resized to: ${size.x}x${size.y}`); // Log canvas resize
                     }
-                    
+
                     const ctx = this._ctx;
-                    // Clear the canvas
+                    // Reset the context's transformation matrix to the identity matrix
+                    // This is crucial to prevent accumulated transformations from previous redraws
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    
                     ctx.clearRect(0, 0, this._el.width, this._el.height);
+                    console.log("Canvas cleared.");
+
+                    // Position the canvas element correctly relative to the map pane
+                    L.DomUtil.setPosition(this._el, topLeft);
+                    console.log(`Canvas positioned at: [${topLeft.x}, ${topLeft.y}]`);
+
+                    // Translate the context to account for the canvas's position relative to the map's origin
+                    // This ensures that latLngToLayerPoint coordinates (which are relative to map origin)
+                    // can be directly used for drawing on the canvas.
+                    ctx.translate(-topLeft.x, -topLeft.y);
+                    console.log(`Context translated by: [${-topLeft.x}, ${-topLeft.y}]`);
                     
                     // Get the center point from the marker's position
-                    const centerPoint = map.latLngToLayerPoint(gpsMarker.getLatLng());
-                    
+                    // Use map.latLngToLayerPoint which accounts for current zoom and pan
+                    const centerLatLng = gpsMarker.getLatLng();
+                    const centerPoint = map.latLngToLayerPoint(centerLatLng);
+                    console.log(`GPS Marker LatLng: [${centerLatLng.lat}, ${centerLatLng.lng}]`); // Log marker LatLng
+                    console.log(`Center Point (Layer): [${centerPoint.x}, ${centerPoint.y}]`); // Log center point
+
                     // Calculate dynamic radii based on map height
                     const mapHeight = map.getSize().y;
                     const lineRadius = mapHeight * 0.4;
                     const sectorRadius = mapHeight * 0.3;
+                    console.log(`Line Radius: ${lineRadius}, Sector Radius: ${sectorRadius}`); // Log radii
 
                     // Draw the heading line
                     if (currentHeading !== null) {
@@ -485,6 +525,7 @@
                         ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
                         ctx.lineWidth = 3;
                         ctx.stroke();
+                        console.log(`Heading Line drawn from [${centerPoint.x}, ${centerPoint.y}] to [${endPointX}, ${endPointY}] with heading ${currentHeading}°`); // Log heading line
                     }
 
                     // Draw the sector
@@ -502,24 +543,20 @@
 
                         ctx.beginPath();
                         ctx.moveTo(centerPoint.x, centerPoint.y);
-                        ctx.arc(centerPoint.x, centerPoint.y, sectorRadius, startAngleRad, endAngleRad, false); // false for clockwise
+                        ctx.arc(centerPoint.x, centerPoint.y, sectorRadius, startAngleRad, endAngleRad, false);
                         ctx.closePath();
                         ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
                         ctx.fill();
+                        console.log(`Sector drawn with heading ${currentHeading}°, angle ${angle}° from ${startAngleDegrees}° to ${endAngleDegrees}°`); // Log sector
                     }
 
                     // Draw lines to symbols
-                    // Access global symbolMarkers directly
-                    symbolMarkers.forEach(symbolObj => {
+                    symbolMarkers.forEach((symbolObj, idx) => {
                         const { marker, latLngAlt } = symbolObj;
                         const [sLat, sLng, sAlt] = latLngAlt;
-
                         const symbolPoint = map.latLngToLayerPoint(marker.getLatLng());
                         
-                        // Calculate bearing from self to symbol
                         const bearingToSymbol = calculateBearing(currentPosition[0], currentPosition[1], sLat, sLng);
-                        
-                        // Calculate angular difference, handling 360-degree wrap-around
                         let bearingDiff = Math.abs(currentHeading - bearingToSymbol);
                         if (bearingDiff > 180) {
                             bearingDiff = 360 - bearingDiff;
@@ -531,15 +568,16 @@
 
                         if (bearingDiff <= 10) {
                             ctx.strokeStyle = 'blue';
-                            ctx.setLineDash([]); // Solid line
+                            ctx.setLineDash([]);
                         } else {
                             ctx.strokeStyle = 'black';
-                            ctx.setLineDash([5, 5]); // Dashed line
+                            ctx.setLineDash([5, 5]);
                         }
-                        ctx.lineWidth = 2; // Make lines slightly thicker for visibility
+                        ctx.lineWidth = 2;
                         ctx.stroke();
+                        console.log(`Line to Symbol ${idx + 1} drawn from [${centerPoint.x}, ${centerPoint.y}] to [${symbolPoint.x}, ${symbolPoint.y}]`); // Log symbol line
                     });
-                    ctx.setLineDash([]); // Reset line dash for other drawings if any
+                    ctx.setLineDash([]);
                 } catch (e) {
                     console.error("Error drawing HeadingSectorLayer:", e);
                 }
@@ -549,6 +587,11 @@
         // Add the custom layer to the map
         const headingSectorLayer = new HeadingSectorLayer().addTo(map);
         console.log("headingSectorLayer after creation:", headingSectorLayer); // Debugging line
+        console.log("Initial state before first redraw:", { // ログを追加
+            currentPosition: currentPosition,
+            currentHeading: currentHeading,
+            symbolMarkers: symbolMarkers
+        });
 
         // --- CHART FUNCTIONS ---
         function initHeadingChart() {
@@ -724,6 +767,7 @@
 
         // --- SIMULATION AND DATA HANDLING ---
         function startSimulation() {
+            console.log("startSimulation function called."); // Added log
             if (simulationInterval) clearInterval(simulationInterval);
             isSimulating = true;
             toggleSimBtn.textContent = isJapanese ? 'シミュレーター停止' : 'Stop Simulator';
@@ -738,7 +782,7 @@
             let currentHdg = currentHeading;
 
             simulationInterval = setInterval(() => {
-                console.log("Simulating and updating UI..."); // Debugging log
+                console.log("Simulating and updating UI inside setInterval..."); // Debugging log inside interval
                 // Simulate movement
                 currentHdg = (currentHdg + (Math.random() - 0.5) * 5) % 360;
                 currentLat += Math.cos(currentHdg * Math.PI / 180) * speed;
@@ -763,6 +807,7 @@
         }
 
         function stopSimulation() {
+            console.log("stopSimulation function called."); // Added log
             isSimulating = false;
             clearInterval(simulationInterval);
             toggleSimBtn.textContent = isJapanese ? 'シミュレーター起動' : 'Start Simulator';
@@ -790,77 +835,10 @@
                     clearInterval(interval);
                     showMessage(isJapanese ? "CSV再生が完了しました。" : "CSV playback complete.", 3000);
                 }
-            }, 500);
+            }, 500); 
         }
 
-        // --- EVENT LISTENERS ---
-        // Tab switching
-        tabMap.addEventListener('click', () => {
-            tabMap.classList.add('active');
-            tabControl.classList.remove('active');
-            mapPanel.classList.remove('hidden');
-            controlPanel.classList.add('hidden');
-            // Invalidate map size to fix display issues after showing a hidden tab
-            setTimeout(() => {
-                map.invalidateSize();
-                // Defensive check before calling redraw
-                if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
-                    console.log("Calling headingSectorLayer.redraw on tab switch."); // Debugging log
-                    headingSectorLayer.redraw(); // No arguments needed now
-                } else {
-                    console.error("headingSectorLayer.redraw is not a function or headingSectorLayer is not defined on tab switch.");
-                }
-                centerMap();
-            }, 100);
-        });
-
-        tabControl.addEventListener('click', () => {
-            tabControl.classList.add('active');
-            tabMap.classList.remove('active');
-            controlPanel.classList.remove('hidden');
-            mapPanel.classList.add('hidden');
-        });
-
-        // Toggle language
-        toggleLangBtn.addEventListener('click', () => {
-            isJapanese = !isJapanese;
-            document.querySelectorAll('[data-label-ja]').forEach(el => {
-                const textContent = isJapanese ? el.getAttribute('data-label-ja') : el.getAttribute('data-label-en');
-                // Only update text content for elements that are not part of the dynamic symbol info
-                if (!el.closest('#symbolInfoContainer')) {
-                    el.textContent = textContent;
-                }
-            });
-            // Update button texts
-            toggleLangBtn.textContent = isJapanese ? '🌐 言語' : '🌐 Language';
-            downloadLogBtn.textContent = isJapanese ? 'ログ保存' : 'Save Log';
-            clearRouteBtn.textContent = isJapanese ? 'ルートクリア' : 'Clear Route';
-            servoBtn.textContent = isJapanese ? 'サーボ制御（仮想）' : 'Servo Control (Virtual)';
-            document.querySelector('[for="csvUpload"]').textContent = isJapanese ? 'CSV再生' : 'Play CSV';
-            clearCacheBtn.textContent = isJapanese ? 'キャッシュクリア' : 'Clear Cache';
-            clearSymbolBtn.textContent = isJapanese ? 'シンボルクリア' : 'Clear Symbols'; // Updated text for multiple symbols
-            
-            if (isSimulating) {
-                toggleSimBtn.textContent = isJapanese ? 'シミュレーター停止' : 'Stop Simulator';
-            } else {
-                toggleSimBtn.textContent = isJapanese ? 'シミュレーター起動' : 'Start Simulator';
-            }
-
-            // Update the new follow button
-            if (isFollowing) {
-                toggleFollowBtn.textContent = isJapanese ? '追従: ON' : 'Follow: ON';
-            } else {
-                toggleFollowBtn.textContent = isJapanese ? '追従: OFF' : 'Follow: OFF';
-            }
-
-            // Update chart label
-            if (headingChart) {
-                headingChart.data.datasets[0].label = isJapanese ? '方位角の分布' : 'Heading Distribution';
-                headingChart.update();
-            }
-            // Re-render symbol info to apply language change
-            updateSymbolInfoUI();
-        });
+        // --- Event Listeners and Handlers ---
 
         // Toggle simulation
         toggleSimBtn.addEventListener('click', () => {
@@ -870,102 +848,111 @@
                 startSimulation();
             }
         });
-        
-        // Toggle follow mode
-        toggleFollowBtn.addEventListener('click', () => {
-            isFollowing = !isFollowing;
-            if (isFollowing) {
-                toggleFollowBtn.textContent = isJapanese ? '追従: ON' : 'Follow: ON';
-                toggleFollowBtn.classList.remove('bg-gray-200');
-                toggleFollowBtn.classList.add('bg-blue-400');
-                map.setView([currentPosition[0], currentPosition[1]], map.getZoom()); // Center immediately
-            } else {
-                toggleFollowBtn.textContent = isJapanese ? '追従: OFF' : 'Follow: OFF';
-                toggleFollowBtn.classList.remove('bg-blue-400');
-                toggleFollowBtn.classList.add('bg-gray-200');
-            }
-        });
 
-        // Center map on current position
-        centerMapBtn.addEventListener('click', () => {
-            centerMap();
-        });
-
-        function centerMap() {
-            if (currentPosition) {
-                map.setView([currentPosition[0], currentPosition[1]], 16);
-            }
-        }
-
-        // Clear route
-        clearRouteBtn.addEventListener('click', () => {
-            routeCoordinates = [];
-            routePolyline.setLatLngs(routeCoordinates);
-            headingHistory = []; // Clear heading data
+        // Toggle language
+        toggleLangBtn.addEventListener('click', () => {
+            isJapanese = !isJapanese;
+            const elements = document.querySelectorAll('[data-label-ja], [data-label-en]');
+            elements.forEach(el => {
+                if (isJapanese) {
+                    el.textContent = el.dataset.labelJa;
+                } else {
+                    el.textContent = el.dataset.labelEn;
+                }
+            });
+            // Update button texts and messages
+            toggleSimBtn.textContent = isSimulating ? (isJapanese ? 'シミュレーター停止' : 'Stop Simulator') : (isJapanese ? 'シミュレーター起動' : 'Start Simulator');
+            toggleFollowBtn.textContent = isFollowing ? (isJapanese ? '追従: ON' : 'Follow: ON') : (isJapanese ? '追従: OFF' : 'Follow: OFF');
+            centerMapBtn.textContent = isJapanese ? '自己位置に移動' : 'Center Map';
+            downloadLogBtn.textContent = isJapanese ? 'ログ保存' : 'Download Log';
+            clearRouteBtn.textContent = isJapanese ? 'ルートクリア' : 'Clear Route';
+            toggleDebugBtn.textContent = isDebugging ? 'Debug: ON' : 'Debug: OFF'; // Debug text remains English
+            servoBtn.textContent = isJapanese ? 'サーボ制御（仮想）' : 'Servo Control (Virtual)';
+            clearCacheBtn.textContent = isJapanese ? 'キャッシュクリア' : 'Clear Cache';
+            clearSymbolBtn.textContent = isJapanese ? 'シンボルクリア' : 'Clear Symbols';
+            document.querySelector('label[for="csvUpload"]').textContent = isJapanese ? 'CSV再生' : 'Play CSV';
+            document.querySelector('#controlPanel h2').textContent = isJapanese ? '制御・グラフ' : 'Control & Charts';
+            document.querySelector('#controlPanel h3').textContent = isJapanese ? '方位角の分布' : 'Heading Distribution';
+            
+            // Update the chart label
             if (headingChart) {
-                headingChart.data.datasets[0].data = new Array(36).fill(0);
+                headingChart.data.datasets[0].label = isJapanese ? '方位角の分布' : 'Heading Distribution';
                 headingChart.update();
             }
-            showMessage(isJapanese ? "ルートとグラフデータをクリアしました。" : "Cleared route and graph data.", 2000);
+
+            showMessage(isJapanese ? "言語を切り替えました。" : "Language switched.", 1500);
+        });
+
+        // Center map
+        centerMapBtn.addEventListener('click', () => {
+            map.setView([currentPosition[0], currentPosition[1]], map.getZoom());
+            showMessage(isJapanese ? "地図を自己位置に移動しました。" : "Map centered on self-position.", 2000);
         });
 
         // Download log
         downloadLogBtn.addEventListener('click', () => {
             if (logData.length === 0) {
-                showMessage(isJapanese ? "ログデータがありません。" : "No log data available.", 2000);
+                showMessage(isJapanese ? "保存するログデータがありません。" : "No log data to save.", 2000);
                 return;
             }
-            const csvRows = ["timestamp,lat,lng,heading,alt,status"]; // Added alt to header
-            logData.forEach(row => {
-                csvRows.push(`${row.timestamp},${row.lat},${row.lng},${row.heading},${row.alt},${row.status}`);
-            });
-            const csvContent = csvRows.join('\n');
+            const csvHeader = "timestamp,lat,lng,heading,alt,status\n";
+            const csvRows = logData.map(row => 
+                `${row.timestamp},${row.lat.toFixed(6)},${row.lng.toFixed(6)},${row.heading.toFixed(2)},${row.alt.toFixed(2)},${row.status}`
+            ).join('\n');
+            const csvContent = csvHeader + csvRows;
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `gnss_log_${new Date().toISOString()}.csv`);
-            link.style.visibility = 'hidden';
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `gnss_log_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            showMessage(isJapanese ? "ログを保存しました。" : "Log saved.", 2000);
+            showMessage(isJapanese ? "ログデータを保存しました。" : "Log data saved.", 2000);
         });
 
-        // Handle CSV upload
-        csvUploadInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+        // Clear route
+        clearRouteBtn.addEventListener('click', () => {
+            routeCoordinates = [];
+            routePolyline.setLatLngs(routeCoordinates);
+            showMessage(isJapanese ? "ルートをクリアしました。" : "Route cleared.", 2000);
+        });
 
+        // CSV Upload
+        csvUploadInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
             const reader = new FileReader();
-            reader.onload = function(event) {
-                const csvText = event.target.result;
-                const rows = csvText.split('\n').slice(1); // Skip header
-                const data = rows.map(row => {
-                    const parts = row.split(',');
-                    return { 
-                        timestamp: parts[0], 
-                        lat: parts[1], 
-                        lng: parts[2], 
-                        heading: parts[3], 
-                        alt: parts[4] ? parseFloat(parts[4]) : 0, // Ensure alt is parsed as float, default to 0
-                        status: parts[5] 
-                    };
-                }).filter(item => !isNaN(parseFloat(item.lat))); // Filter out bad rows
-
-                if (data.length > 0) {
-                    stopSimulation();
-                    clearRouteBtn.click();
-                    playCsvData(data);
-                } else {
-                    showMessage(isJapanese ? "CSVファイルの読み込みに失敗しました。" : "Failed to load CSV file.", 3000);
+            reader.onload = (e) => {
+                const text = e.target.result;
+                const lines = text.split('\n').filter(line => line.trim() !== '');
+                if (lines.length < 2) {
+                    showMessage(isJapanese ? "無効なCSVファイルです。ヘッダーとデータが必要です。" : "Invalid CSV file. Header and data required.", 3000);
+                    return;
                 }
+                const headers = lines[0].split(',').map(h => h.trim());
+                const csvData = lines.slice(1).map(line => {
+                    const values = line.split(',').map(v => v.trim());
+                    let row = {};
+                    headers.forEach((header, i) => {
+                        row[header] = values[i];
+                    });
+                    return row;
+                });
+                playCsvData(csvData);
+                showMessage(isJapanese ? `CSVファイル '${file.name}' を再生します。` : `Playing CSV file '${file.name}'.`, 3000);
             };
-            reader.readAsText(file);
+            reader.onerror = () => {
+                showMessage(isJapanese ? "CSVファイルの読み込み中にエラーが発生しました。" : "Error reading CSV file.", 3000);
+            };
+            reader.readAsText(file); // This line was missing!
         });
+
 
         // Toggle debug state
         toggleDebugBtn.addEventListener('click', () => {
+            console.log("Toggle Debug button clicked."); // Added log
             isDebugging = !isDebugging;
             if (isDebugging) {
                 toggleDebugBtn.textContent = 'Debug: ON';
@@ -980,11 +967,13 @@
 
         // Handle servo button (virtual)
         servoBtn.addEventListener('click', () => {
+            console.log("Servo button clicked."); // Added log
             showMessage(isJapanese ? "仮想サーボ制御コマンドを送信しました。" : "Sent virtual servo control command.", 2000);
         });
 
         // Handle range input for sector angle
         sectorAngleInput.addEventListener('input', () => {
+            console.log("Sector Angle input changed."); // Added log
             angleValSpan.textContent = sectorAngleInput.value;
             // Defensive check before calling redraw
             if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
@@ -997,12 +986,14 @@
 
         // Handle offline tiles checkbox
         useOfflineTilesCheckbox.addEventListener('change', () => {
+            console.log("Offline Tiles checkbox changed."); // Added log
             setTileLayer(useOfflineTilesCheckbox.checked); // Reinitialize layers when cache option changes
             showMessage(useOfflineTilesCheckbox.checked ? (isJapanese ? "タイルキャッシュを有効にしました。" : "Tile caching enabled.") : (isJapanese ? "タイルキャッシュを無効にしました。" : "Tile caching disabled."), 2000);
         });
 
         // Handle clear cache button
         clearCacheBtn.addEventListener('click', () => {
+            console.log("Clear Cache button clicked."); // Added log
             // Clear only tiles associated with our cacheKey
             for (let i = localStorage.length - 1; i >= 0; i--) { // Iterate backwards to avoid issues with changing length
                 const key = localStorage.key(i);
@@ -1016,6 +1007,7 @@
 
         // Handle map click to add a new symbol
         map.on('click', (e) => {
+            console.log("Map clicked to add symbol."); // Added log
             const clickedLat = e.latlng.lat;
             const clickedLng = e.latlng.lng;
             // For simplicity, assume symbol altitude is same as current GPS altitude for now
@@ -1028,6 +1020,7 @@
             
             // Add dragend listener to the new marker
             newMarker.on('dragend', (dragEvent) => {
+                console.log("Symbol marker dragged."); // Added log
                 const draggedLatLng = dragEvent.target.getLatLng();
                 // Find the symbol object in the array and update its latLngAlt
                 const draggedSymbolIndex = symbolMarkers.findIndex(s => s.marker === dragEvent.target);
@@ -1047,6 +1040,7 @@
 
         // Handle map right-click to set self-position
         map.on('contextmenu', (e) => {
+            console.log("Map right-clicked to set self-position."); // Added log
             const newLat = e.latlng.lat;
             const newLng = e.latlng.lng;
             const currentAlt = currentPosition[2]; // Keep current altitude
@@ -1060,22 +1054,65 @@
             clearRouteBtn.click();
 
             // Update self-position and UI
+            currentPosition = [newLat, newLng, currentAlt]; // Directly update currentPosition
             updateAllUI(newLat, newLng, currentHeading, currentAlt);
             showMessage(isJapanese ? `自己位置を ${newLat.toFixed(6)}, ${newLng.toFixed(6)} に移動しました。` : `Self-position moved to ${newLat.toFixed(6)}, ${newLng.toFixed(6)}.`, 3000);
         });
 
         // Handle clear symbol button
         clearSymbolBtn.addEventListener('click', () => {
+            console.log("Clear Symbol button clicked."); // Added log
             if (symbolMarkers.length > 0) {
                 symbolMarkers.forEach(symbolObj => {
                     map.removeLayer(symbolObj.marker); // Remove each marker from the map
                 });
                 symbolMarkers = []; // Clear the array
                 updateSymbolInfoUI(); // Clear the UI display
+                // Explicitly redraw the HeadingSectorLayer to remove lines
+                if (headingSectorLayer && typeof headingSectorLayer.redraw === 'function') {
+                    headingSectorLayer.redraw(); 
+                }
                 showMessage(isJapanese ? "すべてのシンボルをクリアしました。" : "All symbols cleared.", 2000);
             } else {
                 showMessage(isJapanese ? "クリアするシンボルがありません。" : "No symbols to clear.", 2000);
             }
+        });
+
+        // Toggle follow mode
+        toggleFollowBtn.addEventListener('click', () => {
+            console.log("Toggle Follow button clicked."); // Added log
+            isFollowing = !isFollowing;
+            if (isFollowing) {
+                toggleFollowBtn.textContent = isJapanese ? '追従: ON' : 'Follow: ON';
+                toggleFollowBtn.classList.remove('bg-gray-200');
+                toggleFollowBtn.classList.add('bg-blue-400');
+                map.setView([currentPosition[0], currentPosition[1]], map.getZoom()); // Center immediately
+            } else {
+                toggleFollowBtn.textContent = isJapanese ? '追従: OFF' : 'Follow: OFF';
+                toggleFollowBtn.classList.remove('bg-blue-400');
+                toggleFollowBtn.classList.add('bg-gray-200');
+            }
+        });
+
+        // Tab switching logic
+        tabMap.addEventListener('click', () => {
+            mapPanel.classList.remove('hidden');
+            controlPanel.classList.add('hidden');
+            tabMap.classList.add('active', 'bg-blue-500', 'text-white');
+            tabMap.classList.remove('bg-gray-200', 'text-gray-800');
+            tabControl.classList.remove('active', 'bg-blue-500', 'text-white');
+            tabControl.classList.add('bg-gray-200', 'text-gray-800');
+            map.invalidateSize(); // Invalidate map size when switching to map tab
+        });
+
+        tabControl.addEventListener('click', () => {
+            mapPanel.classList.add('hidden');
+            controlPanel.classList.remove('hidden');
+            tabControl.classList.add('active', 'bg-blue-500', 'text-white');
+            tabControl.classList.remove('bg-gray-200', 'text-gray-800');
+            tabMap.classList.remove('active', 'bg-blue-500', 'text-white');
+            tabMap.classList.add('bg-gray-200', 'text-gray-800');
+            // No need to invalidate map size when switching *from* map tab
         });
 
 
