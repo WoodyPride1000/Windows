@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GNSS & SDR Compass UI</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <link href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        /* 小さな補助スタイル（Tailwind中心） */
+        .btn { @apply px-3 py-2 rounded-lg text-sm font-medium bg-gray-200 hover:bg-gray-300 transition-colors duration-200; }
+        .btn-blue { @apply bg-blue-400 text-white hover:bg-blue-500; }
+        .btn-green { @apply bg-green-400 text-white hover:bg-green-500; }
+        .btn-red { @apply bg-red-400 text-white hover:bg-red-500; }
+        .btn-yellow { @apply bg-yellow-400 text-white hover:bg-yellow-500; }
+        .btn-indigo { @apply bg-indigo-400 text-white hover:bg-indigo-500; }
+        .btn-gray { @apply bg-gray-400 text-white hover:bg-gray-500; }
+
+        /* メッセージボックス */
+        #messageBox {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(59,130,246,0.95);
+            color: #fff;
+            padding: 8px 14px;
+            border-radius: 8px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+            z-index: 2000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+        }
+        #messageBox.show { opacity: 1; pointer-events: auto; }
+
+        /* 小さめのコンパス（地図上表示） */
+        #compass {
+            position: absolute;
+            right: 14px;
+            top: 14px;
+            width: 110px;
+            height: 110px;
+            border-radius: 999px;
+            background: #374151;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e5e7eb;
+            z-index: 1400;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            user-select: none;
+        }
+        #compass .needle {
+            position: absolute;
+            width: 6px;
+            height: 40px;
+            background: #ef4444;
+            bottom: 50%;
+            border-radius: 3px;
+            transform-origin: bottom center;
+            transition: transform 0.15s linear;
+            box-shadow: 0 0 6px rgba(0,0,0,0.4);
+        }
+        #compass .needle.south {
+            background: #6b7280;
+            bottom: calc(50% - 6px);
+        }
+        #compass .center {
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            z-index: 4;
+            box-shadow: 0 0 0 3px rgba(75,85,99,0.6);
+        }
+
+        /* Leaflet の z-index 調整（compass を地図上に重ねるため） */
+        .leaflet-container { z-index: 0; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800">
+    <div id="messageBox" aria-live="polite" role="status"></div>
+
+    <div class="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
+        <header role="banner" class="mb-6">
+            <h1 class="text-3xl font-bold text-gray-900">GNSS & SDR Compass UI</h1>
+            <p class="text-gray-600 mt-2">GNSSとSDRデータを統合したリアルタイムUI</p>
+        </header>
+
+        <nav role="tablist" class="flex space-x-2 md:space-x-4 mb-6">
+            <button id="tabMap" role="tab" aria-controls="map-panel" aria-selected="true"
+                class="tab active px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200 bg-blue-500 text-white hover:bg-blue-600">
+                地図
+            </button>
+            <button id="tabControl" role="tab" aria-controls="control-panel" aria-selected="false"
+                class="tab px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200 bg-gray-200 text-gray-800 hover:bg-gray-300">
+                制御・グラフ
+            </button>
+        </nav>
+
+        <main role="main" class="bg-white p-6 rounded-xl shadow-lg relative">
+            <div id="map-panel" role="tabpanel" aria-labelledby="tabMap">
+                <div id="map" class="w-full h-[60vh] rounded-xl shadow-inner mb-4"></div>
+                <div id="compass" aria-hidden="true">
+                    <div class="needle" id="needleN"></div>
+                    <div class="needle south" id="needleS"></div>
+                    <div class="center" aria-hidden="true"></div>
+                    <div style="position:absolute;bottom:6px;font-size:12px;color:#e5e7eb;">Heading</div>
+                </div>
+
+                <section aria-labelledby="info-title" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm bg-gray-50 p-4 rounded-lg shadow-sm">
+                    <h2 id="info-title" class="sr-only">現在地の情報</h2>
+                    <dl class="space-y-2">
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">現在地 (Lat/Lng):</dt>
+                            <dd id="latlng" class="font-mono text-gray-600">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">UTM:</dt>
+                            <dd id="utm" class="font-mono text-gray-600">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">方位角:</dt>
+                            <dd id="heading" class="font-mono text-gray-600">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">高度:</dt>
+                            <dd id="altitude" class="font-mono text-gray-600">--</dd>
+                        </div>
+                    </dl>
+                    <dl class="space-y-2">
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">GPS状態:</dt>
+                            <dd id="gpsStatus" class="font-mono font-semibold text-green-500">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">HDOP:</dt>
+                            <dd id="hdop" class="font-mono text-gray-600">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">PDOP:</dt>
+                            <dd id="pdop" class="font-mono text-gray-600">--</dd>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <dt class="font-bold">VDOP:</dt>
+                            <dd id="vdop" class="font-mono text-gray-600">--</dd>
+                        </div>
+                    </dl>
+                    <div class="col-span-full">
+                        <h3 class="font-bold text-gray-700 mt-2">誤差統計 (GST)</h3>
+                        <dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-2">
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">RMS誤差:</dt>
+                                <dd id="rms" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">長軸SD (m):</dt>
+                                <dd id="smjr_std" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">短軸SD (m):</dt>
+                                <dd id="smnr_std" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">長軸方位 (度):</dt>
+                                <dd id="orient" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">緯度誤差SD (m):</dt>
+                                <dd id="lat_std" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">経度誤差SD (m):</dt>
+                                <dd id="lon_std" class="font-mono text-gray-600">--</dd>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <dt class="font-bold">高度誤差SD (m):</dt>
+                                <dd id="alt_std" class="font-mono text-gray-600">--</dd>
+                            </div>
+                        </dl>
+                    </div>
+                </section>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 mt-4" role="group" aria-label="操作ボタン">
+                    <button id="toggleFollow" class="btn">追従: OFF</button>
+                    <button id="toggleLang" class="btn">🌐 言語</button>
+                    <button id="toggleSim" class="btn btn-yellow">シミュレーター起動</button>
+                    <button id="centerMap" class="btn btn-green">自己位置に移動</button>
+                    <button id="downloadLog" class="btn btn-blue">ログ保存</button>
+                    <button id="clearRoute" class="btn btn-red">ルートクリア</button>
+                    <button id="normalizeSdrBtn" class="btn btn-blue col-span-2 md:col-span-1">受信レベル正規化: OFF</button>
+                    <div class="relative col-span-2 md:col-span-1">
+                        <label for="csvUpload" class="btn btn-indigo cursor-pointer">CSV再生</label>
+                        <input type="file" id="csvUpload" accept=".csv" class="hidden" aria-hidden="true" tabindex="-1">
+                    </div>
+                    <button id="pingServerBtn" class="btn btn-gray">Pingサーバー</button>
+                </div>
+            </div>
+
+            <div id="control-panel" role="tabpanel" aria-labelledby="tabControl" class="hidden">
+                <section aria-labelledby="sdr-controls" class="mb-8">
+                    <h2 id="sdr-controls" class="text-xl font-bold text-gray-900 mb-4">SDR制御</h2>
+                    <form class="flex items-center space-x-4" onsubmit="return false;">
+                        <label for="frequencyInput" class="font-bold">周波数:</label>
+                        <input type="number" id="frequencyInput" value="300" min="1" class="w-24 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" step="any" aria-label="SDR周波数設定（メガヘルツ）">
+                        <span>MHz</span>
+                        <button id="setFrequencyBtn" type="button" class="btn btn-blue">設定</button>
+                    </form>
+                </section>
+
+                <section aria-labelledby="sdr-chart-title">
+                    <h2 id="sdr-chart-title" class="text-xl font-bold text-gray-900 mb-4">SDR受信レベル</h2>
+                    <div class="w-full h-96">
+                        <canvas id="sdrRadarChart"></canvas>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+    <script>
+    (function(){
+        // ---- State ----
+        const state = {
+            follow: false,
+            simRunning: false,
+            socketConnected: false,
+            route: [], // [{ts,lat,lng,alt,heading}]
+            logs: [],
+            normalizeSdr: false,
+            lastKnownPosition: null, // 前回の有効な位置情報を保持
+        };
+
+        // ---- Simple UI helpers ----
+        const msgBox = document.getElementById('messageBox');
+        function showMsg(text, ms=2000){
+            msgBox.textContent = text;
+            msgBox.classList.add('show');
+            clearTimeout(showMsg._t);
+            showMsg._t = setTimeout(()=> msgBox.classList.remove('show'), ms);
+        }
+
+        // ---- Tabs ----
+        const tabMap = document.getElementById('tabMap');
+        const tabControl = document.getElementById('tabControl');
+        const mapPanel = document.getElementById('map-panel');
+        const controlPanel = document.getElementById('control-panel');
+
+        function setActiveTab(tab){
+            if(tab === 'map'){
+                tabMap.setAttribute('aria-selected','true');
+                tabControl.setAttribute('aria-selected','false');
+                mapPanel.classList.remove('hidden');
+                controlPanel.classList.add('hidden');
+                tabMap.classList.add('bg-blue-500','text-white');
+                tabControl.classList.remove('bg-blue-500','text-white');
+            } else {
+                tabControl.setAttribute('aria-selected','true');
+                tabMap.setAttribute('aria-selected','false');
+                controlPanel.classList.remove('hidden');
+                mapPanel.classList.add('hidden');
+                tabControl.classList.add('bg-blue-500','text-white');
+                tabMap.classList.remove('bg-blue-500','text-white');
+            }
+        }
+        tabMap.addEventListener('click', ()=> setActiveTab('map'));
+        tabControl.addEventListener('click', ()=> setActiveTab('control'));
+
+        // ---- Leaflet map ----
+        const map = L.map('map', { zoomControl: true });
+        const tile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+        map.setView([35.681236, 139.767125], 15); // default 東京駅近辺
+
+        // marker and route polyline
+        const selfIcon = L.circleMarker([0,0], { radius:6, color:'#1d4ed8', fillColor:'#93c5fd', fillOpacity:1 });
+        let selfMarker = L.marker([0,0], { interactive:false, opacity:0.0 });
+        selfMarker.addTo(map);
+        const routeLine = L.polyline([], { color:'#10b981', weight:3 }).addTo(map);
+
+        // compass overlay (update needle rotation)
+        const needleN = document.getElementById('needleN');
+        const needleS = document.getElementById('needleS');
+
+        // ---- DOM references for info ----
+        const elLatLng = document.getElementById('latlng');
+        const elUTM = document.getElementById('utm'); // not computed here; placeholder
+        const elHeading = document.getElementById('heading');
+        const elAltitude = document.getElementById('altitude');
+        const elGps = document.getElementById('gpsStatus');
+
+        // ---- Chart.js: SDR radar ----
+        const sdrCtx = document.getElementById('sdrRadarChart').getContext('2d');
+        const sdrLabels = ['Chan A','Chan B','Chan C','Chan D','Chan E','Chan F'];
+        const sdrData = {
+            labels: sdrLabels,
+            datasets: [{
+                label: 'RX Level',
+                data: sdrLabels.map(()=> 0),
+                fill: true,
+                backgroundColor: 'rgba(59,130,246,0.2)',
+                borderColor: 'rgba(59,130,246,0.8)',
+                pointBackgroundColor: 'rgba(59,130,246,0.9)'
+            }]
+        };
+        const sdrChart = new Chart(sdrCtx, {
+            type: 'radar',
+            data: sdrData,
+            options: {
+                responsive: true,
+                scales: {
+                    r: {
+                        beginAtZero: true,
+                        suggestedMax: 100
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+
+        // ---- Socket.IO (try connect to same origin) ----
+        let socket = null;
+        try {
+            socket = io(); // attempt same-origin
+            socket.on('connect', () => {
+                state.socketConnected = true;
+                showMsg('Socket connected');
+            });
+            socket.on('disconnect', () => {
+                state.socketConnected = false;
+                showMsg('Socket disconnected', 1500);
+            });
+            // Expected event names from server: 'gnss' and 'sdr'
+            socket.on('gnss', (d) => {
+                // Expect object like: { ts, lat, lng, alt, heading, fix, hdop, pdop, vdop }
+                handleGnss(d);
+            });
+            socket.on('sdr', (d) => {
+                // Expect array of levels or object {levels: [...]}
+                if(Array.isArray(d)) updateSdrLevels(d);
+                else if(d.levels) updateSdrLevels(d.levels);
+            });
+            // ping response example
+            socket.on('pong', (data) => {
+                showMsg('Server pong: ' + (data || 'ok'), 1500);
+            });
+        } catch (e) {
+            console.warn('Socket.io not available or connection failed.', e);
+        }
+
+        // ---- Utility function: Haversine distance for rough check ----
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a =
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        // ---- Handlers ----
+        function handleGnss(d){
+            // basic normalization/defensive
+            const ts = d.ts || Date.now();
+            const lat = parseFloat(d.lat);
+            const lng = parseFloat(d.lng);
+            const alt = (d.alt !== undefined) ? Number(d.alt) : null;
+            const heading = (d.heading !== undefined) ? Number(d.heading) : 0;
+            const fix = d.fix !== undefined ? d.fix : 1;
+
+            // 無効な値や、極端に0に近い値は無視
+            if (!isFinite(lat) || !isFinite(lng) || (Math.abs(lat) < 0.001 && Math.abs(lng) < 0.001)) {
+                showMsg('GNSSデータが無効なため更新をスキップ', 1000);
+                return;
+            }
+
+            // 前回有効な位置情報が存在し、2000km以上離れている場合は無視
+            if (state.lastKnownPosition) {
+                const distance = getDistance(state.lastKnownPosition.lat, state.lastKnownPosition.lng, lat, lng);
+                if (distance > 2000) {
+                    console.warn(`位置情報のジャンプを検出: ${distance.toFixed(1)} km。更新をスキップします。`);
+                    showMsg('位置の異常なジャンプを検出しました', 2000);
+                    return;
+                }
+            }
+            
+            // チェックを通過した場合、今回の位置情報を保持
+            state.lastKnownPosition = { lat, lng };
+
+            // update UI
+            elLatLng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            elAltitude.textContent = (alt !== null && isFinite(alt)) ? `${alt.toFixed(1)} m` : '--';
+            elHeading.textContent = `${heading.toFixed(1)}°`;
+            elGps.textContent = fix ? 'FIX' : 'NO FIX';
+
+            // compass needles
+            needleN.style.transform = `translateY(-6px) rotate(${heading}deg)`;
+            needleS.style.transform = `translateY(-6px) rotate(${heading + 180}deg)`;
+
+            // update map marker and route
+            const latlng = [lat, lng];
+            selfMarker.setLatLng(latlng);
+            selfMarker.setOpacity(1.0);
+
+            // push to route and to logs
+            state.route.push({ts, lat, lng, alt, heading});
+            state.logs.push({ts, lat, lng, alt, heading});
+
+            routeLine.setLatLngs(state.route.map(p => [p.lat, p.lng]));
+
+            if(state.follow){
+                map.setView(latlng);
+            }
+        }
+
+        function updateSdrLevels(levels){
+            // levels: array of numbers len = sdrLabels.length
+            if(!Array.isArray(levels)) return;
+            const normalized = state.normalizeSdr ? normalizeArray(levels) : levels;
+            sdrChart.data.datasets[0].data = sdrLabels.map((_,i)=> normalized[i] ?? 0);
+            sdrChart.update();
+        }
+
+        function normalizeArray(arr){
+            const max = Math.max(...arr.map(v=> (isFinite(v)?v:0) ));
+            if(!isFinite(max) || max === 0) return arr;
+            return arr.map(v=> (v/max*100));
+        }
+
+        // ---- Buttons & UI wiring ----
+        document.getElementById('toggleFollow').addEventListener('click', (e)=>{
+            state.follow = !state.follow;
+            e.currentTarget.textContent = `追従: ${state.follow? 'ON' : 'OFF'}`;
+            showMsg(`追従 ${state.follow? 'ON' : 'OFF'}`, 1000);
+        });
+
+        document.getElementById('centerMap').addEventListener('click', ()=>{
+            try {
+                const ll = selfMarker.getLatLng();
+                if(ll && isFinite(ll.lat)) map.setView(ll, Math.max(map.getZoom(), 16));
+                else showMsg('自己位置がありません', 1200);
+            } catch(e){ showMsg('自己位置がありません', 1200); }
+        });
+
+        document.getElementById('clearRoute').addEventListener('click', ()=>{
+            state.route = [];
+            routeLine.setLatLngs([]);
+            showMsg('ルートをクリアしました', 1000);
+        });
+
+        document.getElementById('downloadLog').addEventListener('click', ()=>{
+            if(state.logs.length === 0){ showMsg('ログが空です', 1200); return; }
+            const header = ['ts','lat','lng','alt','heading'];
+            const csv = [header.join(',')].concat(state.logs.map(r=> `${r.ts},${r.lat},${r.lng},${r.alt ?? ''},${r.heading}`)).join('\n');
+            const blob = new Blob([csv], { type:'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `gnss_log_${Date.now()}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showMsg('ログをダウンロードしました', 1200);
+        });
+
+        // CSV upload: expected CSV with header: ts,lat,lng,alt,heading
+        const csvInput = document.getElementById('csvUpload');
+        csvInput.addEventListener('change', (ev)=>{
+            const f = ev.target.files && ev.target.files[0];
+            if(!f) return;
+            const fr = new FileReader();
+            fr.onload = (e)=>{
+                const txt = e.target.result;
+                const rows = txt.split(/\r?\n/).map(r=> r.trim()).filter(r=> r.length>0);
+                const data = [];
+                for(let i=0;i<rows.length;i++){
+                    if(i===0 && rows[0].toLowerCase().includes('lat')) {
+                        // skip header
+                        continue;
+                    }
+                    const cols = rows[i].split(',').map(c=> c.trim());
+                    if(cols.length>=3){
+                        const ts = cols[0] ? Number(cols[0]) : Date.now();
+                        const lat = Number(cols[1]);
+                        const lng = Number(cols[2]);
+                        const alt = cols[3] ? Number(cols[3]) : null;
+                        const heading = cols[4] ? Number(cols[4]) : 0;
+                        data.push({ts,lat,lng,alt,heading});
+                    }
+                }
+                if(data.length===0){ showMsg('CSVの解析に失敗しました', 1800); return; }
+                // replay loaded track (simple: push all)
+                state.route = data.slice();
+                routeLine.setLatLngs(state.route.map(p=> [p.lat,p.lng]));
+                // move to first point
+                map.setView([data[0].lat, data[0].lng], 16);
+                // fake feeding to UI (set last)
+                const last = data[data.length-1];
+                handleGnss(last);
+                showMsg('CSVを読み込みました', 1400);
+            };
+            fr.readAsText(f);
+            // clear selection
+            csvInput.value = '';
+        });
+
+        // Ping server (emit 'ping' if socket)
+        document.getElementById('pingServerBtn').addEventListener('click', ()=>{
+            if(socket && state.socketConnected){
+                try {
+                    socket.emit('ping', { ts: Date.now() });
+                    showMsg('ping送信', 800);
+                } catch(e) {
+                    showMsg('ping送信に失敗', 1000);
+                }
+            } else {
+                showMsg('サーバー未接続', 1000);
+            }
+        });
+
+        // normalize SDR
+        document.getElementById('normalizeSdrBtn').addEventListener('click', (e)=>{
+            state.normalizeSdr = !state.normalizeSdr;
+            e.currentTarget.textContent = `受信レベル正規化: ${state.normalizeSdr? 'ON' : 'OFF'}`;
+            showMsg(`SDR正規化 ${state.normalizeSdr? 'ON' : 'OFF'}`, 1100);
+        });
+
+        // set frequency button (just show message; actual send via socket if available)
+        document.getElementById('setFrequencyBtn').addEventListener('click', ()=>{
+            const f = Number(document.getElementById('frequencyInput').value);
+            if(!isFinite(f)){ showMsg('周波数を確認してください', 1200); return; }
+            if(socket && state.socketConnected){
+                socket.emit('set_frequency', { freq_mhz: f });
+                showMsg(`周波数 ${f} MHz を送信`, 1200);
+            } else {
+                showMsg(`ローカル: 周波数 ${f} MHzに設定（疑似）`, 1200);
+            }
+        });
+
+        // ---- Simulator (simple) ----
+        let simInterval = null;
+        document.getElementById('toggleSim').addEventListener('click', (e)=>{
+            state.simRunning = !state.simRunning;
+            e.currentTarget.textContent = state.simRunning ? 'シミュレーター停止' : 'シミュレーター起動';
+            if(state.simRunning) startSim(); else stopSim();
+        });
+
+        function startSim(){
+            // create a circular path around current center
+            const center = map.getCenter();
+            let angle = 0;
+            simInterval = setInterval(()=>{
+                angle += 8 + Math.random()*4;
+                const r = 0.0015 + Math.random()*0.0008; // ~100-200m radius
+                const lat = center.lat + Math.cos(angle * Math.PI/180) * r;
+                const lng = center.lng + Math.sin(angle * Math.PI/180) * r;
+                const heading = (angle + 90) % 360;
+                const alt = 10 + Math.sin(angle/10)*2;
+                const obj = { ts: Date.now(), lat, lng, alt, heading, fix:1, hdop:0.9 };
+                handleGnss(obj);
+                // fake SDR levels
+                const sdr = sdrLabels.map((_,i)=> 30 + Math.abs(Math.sin((angle + i*40)*Math.PI/180)) * 40 + Math.random()*6 );
+                updateSdrLevels(sdr);
+                // if socket connected, emit simulated events (optional)
+                if(socket && state.socketConnected){
+                    socket.emit('gnss_sim', obj);
+                    socket.emit('sdr_sim', { levels: sdr });
+                }
+            }, 700);
+            showMsg('シミュレータ開始', 1200);
+        }
+        function stopSim(){
+            if(simInterval) { clearInterval(simInterval); simInterval = null; }
+            showMsg('シミュレータ停止', 1000);
+        }
+
+        // ---- Utility: normalize rotation (0-360) ----
+        function normAngle(a){
+            let v = a % 360;
+            if(v < 0) v += 360;
+            return v;
+        }
+
+        // ---- initial UI message ----
+        showMsg('UI 初期化完了');
+
+        // ---- Accessibility: keyboard tab switching (Left/Right) ----
+        [tabMap, tabControl].forEach((el)=>{
+            el.addEventListener('keydown', (ev)=>{
+                if(ev.key === 'ArrowRight' || ev.key === 'ArrowLeft'){
+                    ev.preventDefault();
+                    setActiveTab(ev.key === 'ArrowRight' ? 'control' : 'map');
+                    const target = (ev.key === 'ArrowRight') ? tabControl : tabMap;
+                    target.focus();
+                }
+            });
+        });
+
+        // ---- defensive: expose socket for debugging in console ----
+        window.__gnss_ui = { state, map, socket, sdrChart, routeLine };
+
+        // ---- End IIFE ----
+    })();
+    </script>
+</body>
+</html>
